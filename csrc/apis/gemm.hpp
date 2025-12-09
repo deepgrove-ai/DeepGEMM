@@ -4,7 +4,6 @@
 
 #if DG_FP8_COMPATIBLE and DG_TENSORMAP_COMPATIBLE
 #include "../jit_kernels/impls/sm90_fp8_gemm_1d1d.hpp"
-#include "../jit_kernels/impls/sm90_fp8_gemm_1d1d_rowwise.hpp" // <--- NEW: Include row-wise launcher
 #include "../jit_kernels/impls/sm90_fp8_gemm_r.hpp"
 #include "../jit_kernels/impls/sm90_fp8_gemm_1d2d.hpp"
 #include "../jit_kernels/impls/sm90_bf16_gemm.hpp"
