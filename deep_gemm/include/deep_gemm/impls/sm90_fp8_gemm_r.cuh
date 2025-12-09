@@ -403,7 +403,7 @@ sm90_fp8_gemm_1d1d_rowwise_impl(__nv_fp8_e4m3* gmem_a_ptr, __nv_fp8_e4m3* gmem_b
             }
             __syncwarp();
             
-            // tile_idx++;
+            tile_idx++;
         }
     }
 #else
