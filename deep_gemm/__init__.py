@@ -33,7 +33,7 @@ if version.parse(cuda_version) >= version.parse('12.1'):
     # DeepGEMM Kernels
     from ._C import (
         # FP8 GEMMs
-        fp8_gemm_nt, fp8_gemm_nn,
+        fp8_gemm_nt, fp8_gemm_nn, fp8_gemm_rowwise_nt,
         fp8_gemm_tn, fp8_gemm_tt,
         fp8_gemm_nt_skip_head_mid,
         m_grouped_fp8_gemm_nt_contiguous,
