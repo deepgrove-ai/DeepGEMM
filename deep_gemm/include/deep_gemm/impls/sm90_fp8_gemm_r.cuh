@@ -288,7 +288,7 @@ sm90_fp8_gemm_1d1d_rowwise_impl(__nv_fp8_e4m3* gmem_a_ptr, __nv_fp8_e4m3* gmem_b
             // 1. Wait and Load Scales
             // -----------------------------------------------------------
             uint32_t scale_phase = (tile_idx & 1);
-            scale_full_barrier->wait(scale_phase ^ 1);
+            scale_full_barrier->wait(scale_phase);
             
             // Load Scales into Registers (Constant for the Tile)
             float scale_a_0 = ld_shared(smem_sfa_ptr + r_0);
@@ -389,10 +389,19 @@ sm90_fp8_gemm_1d1d_rowwise_impl(__nv_fp8_e4m3* gmem_a_ptr, __nv_fp8_e4m3* gmem_b
             cutlass::arch::NamedBarrier::sync(128, math_wg_idx);
 
             // TMA store
-            if (warp_idx % 4 == 0 and cute::elect_one_sync()) {
+            // Only the first thread of the first Math Warp should trigger the store for the whole group.
+            // We use math_wg_idx (0 for the first group) and lane_idx.
+            if (math_wg_idx == 0 && lane_idx == 0 and cute::elect_one_sync()) {
+                
+                // 1. Point to the BASE of the Shared Memory Buffer (smem_d), not the warp offset
+                // 2. Point to the BASE of the Global Memory Tile (m_block_idx * BLOCK_M), not + r_0
+                
                 cute::SM90_TMA_REDUCE_ADD_2D::copy(
-                    &tensor_map_cd, smem_d_0, n_block_idx * BLOCK_N,
-                    current_group_idx * shape_m + m_block_idx * BLOCK_M + r_0);
+                    &tensor_map_cd, 
+                    smem_d, // <--- FIX: Base Pointer
+                    n_block_idx * BLOCK_N,
+                    current_group_idx * shape_m + m_block_idx * BLOCK_M // <--- FIX: Base Coordinate (No + r_0)
+                );
                 cute::tma_store_arrive();
             }
             __syncwarp();
