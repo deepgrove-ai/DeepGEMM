@@ -82,6 +82,7 @@ sm90_fp8_gemm_1d1d_rowwise_impl(__nv_fp8_e4m3* gmem_a_ptr, __nv_fp8_e4m3* gmem_b
     }
     __syncwarp();
 
+
     extern __shared__ __align__(1024) uint8_t smem_buffer[];
     DG_STATIC_ASSERT(SMEM_D_SIZE % 1024 == 0, "Shared memory of A/B must be aligned to 1024 bytes");
 
@@ -222,7 +223,7 @@ sm90_fp8_gemm_1d1d_rowwise_impl(__nv_fp8_e4m3* gmem_a_ptr, __nv_fp8_e4m3* gmem_b
                 // -----------------------------------------------------------
                 // Wait for consumer to be done with previous scales
                 uint32_t scale_phase = (tile_idx & 1);
-                scale_empty_barrier->wait(scale_phase);
+                scale_empty_barrier->wait(scale_phase ^ 1);
                 
                 // Issue TMA copy for scales (Once per tile)
                 // Use block_K=1 or generic logic, as scales are (M, 1) and (1, N)
@@ -389,19 +390,10 @@ sm90_fp8_gemm_1d1d_rowwise_impl(__nv_fp8_e4m3* gmem_a_ptr, __nv_fp8_e4m3* gmem_b
             cutlass::arch::NamedBarrier::sync(128, math_wg_idx);
 
             // TMA store
-            // Only the first thread of the first Math Warp should trigger the store for the whole group.
-            // We use math_wg_idx (0 for the first group) and lane_idx.
-            if (math_wg_idx == 0 && lane_idx == 0 and cute::elect_one_sync()) {
-                
-                // 1. Point to the BASE of the Shared Memory Buffer (smem_d), not the warp offset
-                // 2. Point to the BASE of the Global Memory Tile (m_block_idx * BLOCK_M), not + r_0
-                
+            if (warp_idx % 4 == 0 and cute::elect_one_sync()) {
                 cute::SM90_TMA_REDUCE_ADD_2D::copy(
-                    &tensor_map_cd, 
-                    smem_d, // <--- FIX: Base Pointer
-                    n_block_idx * BLOCK_N,
-                    current_group_idx * shape_m + m_block_idx * BLOCK_M // <--- FIX: Base Coordinate (No + r_0)
-                );
+                    &tensor_map_cd, smem_d_0, n_block_idx * BLOCK_N,
+                    current_group_idx * shape_m + m_block_idx * BLOCK_M + r_0);
                 cute::tma_store_arrive();
             }
             __syncwarp();
