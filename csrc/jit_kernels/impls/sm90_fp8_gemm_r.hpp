@@ -84,7 +84,7 @@ static void sm90_fp8_gemm_rowwise(const torch::Tensor& a, const torch::Tensor& s
                                   const int& m, const int& n, const int& k,
                                   const cute::UMMA::Major& major_a, const cute::UMMA::Major& major_b,
                                   const std::string& compiled_dims) {
-    DG_HOST_ASSERT(c.has_value() and d.scalar_type() == torch::kFloat);
+    DG_HOST_ASSERT(d.scalar_type() == torch::kFloat);
     DG_HOST_ASSERT(major_a == cute::UMMA::Major::K and major_b == cute::UMMA::Major::K);
 
     // Reuse existing config logic
