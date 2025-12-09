@@ -28,7 +28,7 @@ template <uint32_t SHAPE_M, uint32_t SHAPE_N, uint32_t SHAPE_K,
           uint32_t kNumSMs,
           GemmType kGemmType, typename cd_dtype_t>
 __global__ __launch_bounds__(kNumTMAThreads + kNumMathThreads, 1) void
-sm90_fp8_gemm_1d1d_impl(__nv_fp8_e4m3* gmem_a_ptr, __nv_fp8_e4m3* gmem_b_ptr,
+sm90_fp8_gemm_1d1d_rowwise_impl(__nv_fp8_e4m3* gmem_a_ptr, __nv_fp8_e4m3* gmem_b_ptr,
                         int* grouped_layout,
                         cute::TmaDescriptor* tensor_map_buffer,
                         uint32_t shape_m, uint32_t shape_n, uint32_t shape_k,
