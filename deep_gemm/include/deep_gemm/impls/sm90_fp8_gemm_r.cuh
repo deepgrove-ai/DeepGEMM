@@ -222,7 +222,7 @@ sm90_fp8_gemm_1d1d_rowwise_impl(__nv_fp8_e4m3* gmem_a_ptr, __nv_fp8_e4m3* gmem_b
                 // -----------------------------------------------------------
                 // Wait for consumer to be done with previous scales
                 uint32_t scale_phase = (tile_idx & 1);
-                scale_empty_barrier->wait(scale_phase ^ 1);
+                scale_empty_barrier->wait(scale_phase);
                 
                 // Issue TMA copy for scales (Once per tile)
                 // Use block_K=1 or generic logic, as scales are (M, 1) and (1, N)
