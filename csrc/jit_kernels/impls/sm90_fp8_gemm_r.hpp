@@ -36,7 +36,7 @@ public:
     static std::string generate_impl(const Args& args) {
         // Change 1: Include the new row-wise kernel header and call the row-wise impl
         return fmt::format(R"(
-#include <deep_gemm/impls/sm90_fp8_gemm_1d1d_rowwise.cuh>
+#include <deep_gemm/impls/sm90_fp8_gemm_r.cuh>
 
 using namespace deep_gemm;
 
