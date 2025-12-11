@@ -12,7 +12,6 @@
 
 namespace deep_gemm {
 
-// 1. Rename Runtime Class to distinguish from Block-wise version
 class SM90FP8GemmRowWiseRuntime final: public LaunchRuntime<SM90FP8GemmRowWiseRuntime> {
 public:
     struct Args {
@@ -34,9 +33,8 @@ public:
     };
 
     static std::string generate_impl(const Args& args) {
-        // Change 1: Include the new row-wise kernel header and call the row-wise impl
         return fmt::format(R"(
-#include <deep_gemm/impls/sm90_fp8_gemm_r.cuh>
+#include <deep_gemm/impls/sm90_fp8_gemm_1d1d_rowwise.cuh>
 
 using namespace deep_gemm;
 
@@ -87,7 +85,6 @@ static void sm90_fp8_gemm_rowwise(const torch::Tensor& a, const torch::Tensor& s
     DG_HOST_ASSERT(d.scalar_type() == torch::kFloat);
     DG_HOST_ASSERT(major_a == cute::UMMA::Major::K and major_b == cute::UMMA::Major::K);
 
-    // Reuse existing config logic
     const auto& config = get_best_config<SM90ArchSpec>(
         GemmType::Normal, KernelType::Kernel1D1D,
         m, n, k, 1, major_a, major_b,
@@ -106,9 +103,7 @@ static void sm90_fp8_gemm_rowwise(const torch::Tensor& a, const torch::Tensor& s
                                                 config.block_k, k, 1,
                                                 config.smem_config.swizzle_b_mode);
     
-    // Change 2: Scale TMA Descriptors
-    // For Row-wise, scales are (M, 1) and (1, N). 
-    // We pass global_k = 1 and block_k = 1.
+    // Row-wise Scales (M, 1) and (N, 1)
     const auto& tensor_map_sfa = make_tma_sf_desc(cute::UMMA::Major::MN, sfa, m, 1,
                                                   config.block_m, 1, 1, 0);
     const auto& tensor_map_sfb = make_tma_sf_desc(cute::UMMA::Major::MN, sfb, n, 1,
@@ -120,7 +115,6 @@ static void sm90_fp8_gemm_rowwise(const torch::Tensor& a, const torch::Tensor& s
                                                  static_cast<int>(d.stride(-2)), 1,
                                                  0);
 
-    // Launch using the new Runtime class
     const SM90FP8GemmRowWiseRuntime::Args& args = {
         .m = m, .n = n, .k = k,
         .num_groups = 1,
@@ -140,7 +134,6 @@ static void sm90_fp8_gemm_rowwise(const torch::Tensor& a, const torch::Tensor& s
         .tensor_map_cd = tensor_map_cd,
     };
     const auto& code = SM90FP8GemmRowWiseRuntime::generate(args);
-    // Change 3: Build using unique name to avoid JIT collision
     const auto& runtime = compiler->build("sm90_fp8_gemm_1d1d_rowwise", code);
 
     SM90FP8GemmRowWiseRuntime::launch(runtime, args);
@@ -155,7 +148,7 @@ static void sm90_fp8_k_grouped_gemm_rowwise(const torch::Tensor& a, const torch:
                                          const torch::Tensor& tensor_map_buffer,
                                          const cute::UMMA::Major& major_a, const cute::UMMA::Major& major_b,
                                          const std::string& compiled_dims) {
-    DG_HOST_ASSERT(c.has_value() and d.scalar_type() == torch::kFloat);
+    DG_HOST_ASSERT(d.scalar_type() == torch::kFloat);
     DG_HOST_ASSERT(major_a == cute::UMMA::Major::K and major_b == cute::UMMA::Major::K);
 
     const auto& num_groups = static_cast<int>(ks.size());
@@ -170,7 +163,6 @@ static void sm90_fp8_k_grouped_gemm_rowwise(const torch::Tensor& a, const torch:
     DG_HOST_ASSERT(config.smem_config.swizzle_b_mode == config.block_k);
 
     int first_k = 0, sum_k = 0;
-    // Note: sum_sf_k calculation removed/ignored because row-scales don't scale with K
     for (int i = 0; i < num_groups; ++ i) {
         if (first_k == 0 and ks[i] != 0)
             first_k = ks[i];
@@ -187,9 +179,6 @@ static void sm90_fp8_k_grouped_gemm_rowwise(const torch::Tensor& a, const torch:
                                                     config.block_k, first_k, 1,
                                                     config.smem_config.swizzle_b_mode);
     
-    // Change 4: Grouped GEMM Scale Descriptors
-    // Even in K-Grouped, M and N are fixed for the tile. Scales are just (M, 1) and (1, N).
-    // We do NOT use sum_sf_k here.
     const auto& tensor_map_sfa = make_tma_sf_desc(cute::UMMA::Major::MN, sfa, m, 1,
                                                   config.block_m, 1, 1, 0);
     const auto& tensor_map_sfb = make_tma_sf_desc(cute::UMMA::Major::MN, sfb, n, 1,
@@ -215,6 +204,135 @@ static void sm90_fp8_k_grouped_gemm_rowwise(const torch::Tensor& a, const torch:
         .tensor_map_buffer = tensor_map_buffer.data_ptr(),
         .tensor_map_a_base = tensor_map_a_base,
         .tensor_map_b_base = tensor_map_b_base,
+        .tensor_map_sfa = tensor_map_sfa,
+        .tensor_map_sfb = tensor_map_sfb,
+        .tensor_map_cd = tensor_map_cd,
+    };
+    const auto& code = SM90FP8GemmRowWiseRuntime::generate(args);
+    const auto& runtime = compiler->build("sm90_fp8_gemm_1d1d_rowwise", code);
+
+    SM90FP8GemmRowWiseRuntime::launch(runtime, args);
+}
+
+static void sm90_m_grouped_fp8_gemm_rowwise_contiguous(const torch::Tensor& a, const torch::Tensor& sfa,
+                                              const torch::Tensor& b, const torch::Tensor& sfb,
+                                              const torch::Tensor& d,
+                                              const torch::Tensor& m_indices,
+                                              const int& num_groups, const int& m, const int& n, const int& k,
+                                              const cute::UMMA::Major& major_a, const cute::UMMA::Major& major_b,
+                                              const std::string& compiled_dims) {
+    DG_HOST_ASSERT(d.scalar_type() == torch::kFloat);
+    DG_HOST_ASSERT(major_a == cute::UMMA::Major::K and major_b == cute::UMMA::Major::K);
+
+    const auto& config = get_best_config<SM90ArchSpec>(
+        GemmType::MGroupedContiguous, KernelType::Kernel1D1D,
+        m, n, k, 1, major_a, major_b,
+        torch::kFloat8_e4m3fn, d.scalar_type(), false,
+        device_runtime->get_num_sms());
+
+    DG_HOST_ASSERT(config.smem_config.swizzle_a_mode == config.block_k);
+    DG_HOST_ASSERT(config.smem_config.swizzle_b_mode == config.block_k);
+
+    const auto& tensor_map_a = make_tma_a_desc(major_a, a, m, k,
+                                               SM90ArchSpec::get_ab_load_block_m(config.multicast_config, config.block_m),
+                                               config.block_k, k, 1,
+                                               config.smem_config.swizzle_a_mode);
+    const auto& tensor_map_b = make_tma_b_desc(major_b, b, n, k,
+                                               SM90ArchSpec::get_ab_load_block_n(config.multicast_config, config.block_n),
+                                               config.block_k, k, num_groups,
+                                               config.smem_config.swizzle_b_mode);
+    
+    // SFB needs num_groups stride
+    const auto& tensor_map_sfa = make_tma_sf_desc(cute::UMMA::Major::MN, sfa, m, 1,
+                                                  config.block_m, 1, 1, 0);
+    const auto& tensor_map_sfb = make_tma_sf_desc(cute::UMMA::Major::MN, sfb, n, 1,
+                                                  config.block_n, 1, num_groups, 0);
+
+    const auto& tensor_map_cd = make_tma_cd_desc(d, m, n,
+                                                 SM90ArchSpec::get_cd_store_block_m(config.block_m, true),
+                                                 SM90ArchSpec::get_cd_store_block_n(config.block_n),
+                                                 static_cast<int>(d.stride(-2)), 1,
+                                                 config.smem_config.swizzle_cd_mode);
+
+    const SM90FP8GemmRowWiseRuntime::Args& args = {
+        .m = m, .n = n, .k = k,
+        .num_groups = num_groups,
+        .compiled_dims = compiled_dims,
+        .gemm_config = config,
+        .launch_args = LaunchArgs(config.num_sms, config.thread_config.num_threads,
+                                  config.smem_config.smem_size,
+                                  config.multicast_config.num_multicast),
+        .gmem_a_ptr = a.data_ptr(),
+        .gmem_b_ptr = b.data_ptr(),
+        .grouped_layout = m_indices.data_ptr(),
+        .tensor_map_buffer = nullptr,
+        .tensor_map_a_base = tensor_map_a,
+        .tensor_map_b_base = tensor_map_b,
+        .tensor_map_sfa = tensor_map_sfa,
+        .tensor_map_sfb = tensor_map_sfb,
+        .tensor_map_cd = tensor_map_cd,
+    };
+    const auto& code = SM90FP8GemmRowWiseRuntime::generate(args);
+    const auto& runtime = compiler->build("sm90_fp8_gemm_1d1d_rowwise", code);
+
+    SM90FP8GemmRowWiseRuntime::launch(runtime, args);
+}
+
+static void sm90_m_grouped_fp8_gemm_rowwise_masked(const torch::Tensor& a, const torch::Tensor& sfa,
+                                            const torch::Tensor& b, const torch::Tensor& sfb,
+                                            const torch::Tensor& d,
+                                            const torch::Tensor& masked_m,
+                                            const int& num_groups, const int& m, const int& n, const int& k,
+                                            const int& expected_m,
+                                            const cute::UMMA::Major& major_a, const cute::UMMA::Major& major_b,
+                                            const std::string& compiled_dims) {
+    DG_HOST_ASSERT(d.scalar_type() == torch::kFloat);
+    DG_HOST_ASSERT(major_a == cute::UMMA::Major::K and major_b == cute::UMMA::Major::K);
+
+    const auto& config = get_best_config<SM90ArchSpec>(
+        GemmType::MGroupedMasked, KernelType::Kernel1D1D,
+        expected_m, n, k, num_groups, major_a, major_b,
+        torch::kFloat8_e4m3fn, d.scalar_type(), false,
+        device_runtime->get_num_sms());
+
+    DG_HOST_ASSERT(config.smem_config.swizzle_a_mode == config.block_k);
+    DG_HOST_ASSERT(config.smem_config.swizzle_b_mode == config.block_k);
+
+    const auto& tensor_map_a = make_tma_a_desc(major_a, a, m, k,
+                                               SM90ArchSpec::get_ab_load_block_m(config.multicast_config, config.block_m),
+                                               config.block_k, k, num_groups,
+                                               config.smem_config.swizzle_a_mode);
+    const auto& tensor_map_b = make_tma_b_desc(major_b, b, n, k,
+                                               SM90ArchSpec::get_ab_load_block_n(config.multicast_config, config.block_n),
+                                               config.block_k, k, num_groups,
+                                               config.smem_config.swizzle_b_mode);
+    
+    // Row scales
+    const auto& tensor_map_sfa = make_tma_sf_desc(cute::UMMA::Major::MN, sfa, m, 1,
+                                                  config.block_m, 1, num_groups, 0);
+    const auto& tensor_map_sfb = make_tma_sf_desc(cute::UMMA::Major::MN, sfb, n, 1,
+                                                  config.block_n, 1, num_groups, 0);
+
+    const auto& tensor_map_cd = make_tma_cd_desc(d, m, n,
+                                                 SM90ArchSpec::get_cd_store_block_m(config.block_m, true),
+                                                 SM90ArchSpec::get_cd_store_block_n(config.block_n),
+                                                 static_cast<int>(d.stride(-2)), num_groups,
+                                                 config.smem_config.swizzle_cd_mode);
+
+    const SM90FP8GemmRowWiseRuntime::Args& args = {
+        .m = m, .n = n, .k = k,
+        .num_groups = num_groups,
+        .compiled_dims = compiled_dims,
+        .gemm_config = config,
+        .launch_args = LaunchArgs(config.num_sms, config.thread_config.num_threads,
+                                  config.smem_config.smem_size,
+                                  config.multicast_config.num_multicast),
+        .gmem_a_ptr = a.data_ptr(),
+        .gmem_b_ptr = b.data_ptr(),
+        .grouped_layout = masked_m.data_ptr(),
+        .tensor_map_buffer = nullptr,
+        .tensor_map_a_base = tensor_map_a,
+        .tensor_map_b_base = tensor_map_b,
         .tensor_map_sfa = tensor_map_sfa,
         .tensor_map_sfb = tensor_map_sfb,
         .tensor_map_cd = tensor_map_cd,
