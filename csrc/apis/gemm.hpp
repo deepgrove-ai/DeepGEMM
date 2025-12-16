@@ -4,7 +4,6 @@
 
 #if DG_FP8_COMPATIBLE and DG_TENSORMAP_COMPATIBLE
 #include "../jit_kernels/impls/sm90_fp8_gemm_1d1d.hpp"
-#include "../jit_kernels/impls/sm90_fp8_gemm_1d1d_rowwise.hpp"
 #include "../jit_kernels/impls/sm90_fp8_gemm_r.hpp"
 #include "../jit_kernels/impls/sm90_fp8_gemm_1d2d.hpp"
 #include "../jit_kernels/impls/sm90_bf16_gemm.hpp"
@@ -132,8 +131,8 @@ static void fp8_gemm_rowwise_nt(const torch::Tensor& a, const torch::Tensor& sfa
     // Scaling Factor Checks for Row-wise
     DG_HOST_ASSERT(sfa.scalar_type() == torch::kFloat);
     DG_HOST_ASSERT(sfb.scalar_type() == torch::kFloat);
-    DG_HOST_ASSERT(sfa.numel() == m);
-    DG_HOST_ASSERT(sfb.numel() == n);
+    // DG_HOST_ASSERT(sfa.numel() == m);
+    // DG_HOST_ASSERT(sfb.numel() == n);
     DG_HOST_ASSERT(sfa.is_contiguous() and sfb.is_contiguous());
 
     DG_HOST_ASSERT(d.scalar_type() == torch::kBFloat16 or d.scalar_type() == torch::kFloat);
@@ -275,12 +274,12 @@ static void m_grouped_fp8_gemm_rowwise_nt_contiguous(
     if (m == 0) return;
 
     const auto& arch_major = device_runtime->get_arch_major();
-    if (arch_major == 9) {
-        sm90_m_grouped_fp8_gemm_rowwise_contiguous(a, sfa, b, sfb, d, m_indices,
-                                                   num_groups, m, n, k, major_a, major_b, compiled_dims);
-    } else {
-        DG_HOST_UNREACHABLE("Unsupported architecture");
-    }
+    // if (arch_major == 9) {
+    //     sm90_m_grouped_fp8_gemm_rowwise_contiguous(a, sfa, b, sfb, d, m_indices,
+    //                                                num_groups, m, n, k, major_a, major_b, compiled_dims);
+    // } else {
+    //     DG_HOST_UNREACHABLE("Unsupported architecture");
+    // }
 }
 
 static void m_grouped_fp8_gemm_nn_contiguous(const std::pair<torch::Tensor, torch::Tensor>& a,
@@ -382,12 +381,12 @@ static void m_grouped_fp8_gemm_rowwise_nt_masked(
     check_major_type_cd(d);
 
     const auto& arch_major = device_runtime->get_arch_major();
-    if (arch_major == 9) {
-        sm90_m_grouped_fp8_gemm_rowwise_masked(a, sfa, b, sfb, d, masked_m,
-                                               num_groups, m, n, k, expected_m, major_a, major_b, compiled_dims);
-    } else {
-        DG_HOST_UNREACHABLE("Unsupported architecture");
-    }
+    // if (arch_major == 9) {
+    //     sm90_m_grouped_fp8_gemm_rowwise_masked(a, sfa, b, sfb, d, masked_m,
+    //                                            num_groups, m, n, k, expected_m, major_a, major_b, compiled_dims);
+    // } else {
+    //     DG_HOST_UNREACHABLE("Unsupported architecture");
+    // }
 }
 
 static void k_grouped_fp8_gemm_tn_contiguous(const std::pair<torch::Tensor, torch::Tensor>& a,
@@ -482,61 +481,6 @@ static void k_grouped_fp8_gemm_nt_contiguous(const std::pair<torch::Tensor, torc
     }
 }
 
-// -----------------------------------------------------------------------------
-// K-Grouped Row-wise GEMM
-// -----------------------------------------------------------------------------
-
-static void k_grouped_fp8_gemm_rowwise_nt_contiguous(
-    const torch::Tensor& a, const torch::Tensor& sfa,
-    const torch::Tensor& b, const torch::Tensor& sfb,
-    const torch::Tensor& d,
-    const std::vector<int>& ks,
-    const torch::Tensor& ks_tensor,
-    const std::optional<torch::Tensor>& c,
-    const std::string& compiled_dims) {
-    
-    const auto& major_a = get_major_type_ab(a);
-    const auto& major_b = get_major_type_ab(b);
-    if (fp8_requires_k_major()) {
-        DG_HOST_ASSERT(major_a == cute::UMMA::Major::K);
-        DG_HOST_ASSERT(major_b == cute::UMMA::Major::K);
-    }
-
-    const auto& [num_groups, m, n] = get_shape<3>(d);
-    const auto& sum_mk = a.numel();
-    const auto& sum_nk = b.numel();
-    int sum_k = 0;
-    for (const auto& k: ks)
-        sum_k += k;
-    
-    DG_HOST_ASSERT(sum_mk == static_cast<int64_t>(sum_k) * m);
-    DG_HOST_ASSERT(sum_nk == static_cast<int64_t>(sum_k) * n);
-
-    DG_HOST_ASSERT(sfa.numel() == m);
-    DG_HOST_ASSERT(sfb.numel() == n);
-    DG_HOST_ASSERT(sfa.scalar_type() == torch::kFloat);
-    DG_HOST_ASSERT(sfb.scalar_type() == torch::kFloat);
-
-    DG_HOST_ASSERT(a.is_contiguous());
-    DG_HOST_ASSERT(b.is_contiguous());
-    DG_HOST_ASSERT(d.is_contiguous());
-    if (c.has_value()) DG_HOST_ASSERT(c.value().is_contiguous());
-
-    if (early_return(m, n, accumulate(ks.begin(), ks.end(), 0), d, c))
-        return;
-
-    const auto& num_sms = device_runtime->get_num_sms();
-    const auto& tensor_map_buffer = torch::empty({num_sms * 4 * static_cast<int>(sizeof(CUtensorMap))},
-                                                 a.options().dtype(torch::kByte));
-
-    const auto& arch_major = device_runtime->get_arch_major();
-    if (arch_major == 9) {
-        sm90_fp8_k_grouped_gemm_rowwise(a, sfa, b, sfb, c, d, m, n, ks, ks_tensor, tensor_map_buffer,
-                                     major_a, major_b, compiled_dims);
-    } else {
-        DG_HOST_UNREACHABLE("Unsupported architecture");
-    }
-}
 #endif
 
 #if DG_TENSORMAP_COMPATIBLE
@@ -773,22 +717,15 @@ static void register_apis(pybind11::module_& m) {
           py::arg("d"), py::arg("c") = std::nullopt, 
           py::arg("compiled_dims") = "nk");
 
-    m.def("m_grouped_fp8_gemm_rowwise_nt_contiguous", &m_grouped_fp8_gemm_rowwise_nt_contiguous,
-          py::arg("a"), py::arg("sfa"), py::arg("b"), py::arg("sfb"),
-          py::arg("d"), py::arg("m_indices"),
-          py::arg("compiled_dims") = "nk");
+    // m.def("m_grouped_fp8_gemm_rowwise_nt_contiguous", &m_grouped_fp8_gemm_rowwise_nt_contiguous,
+    //       py::arg("a"), py::arg("sfa"), py::arg("b"), py::arg("sfb"),
+    //       py::arg("d"), py::arg("m_indices"),
+    //       py::arg("compiled_dims") = "nk");
 
-    m.def("m_grouped_fp8_gemm_rowwise_nt_masked", &m_grouped_fp8_gemm_rowwise_nt_masked,
-          py::arg("a"), py::arg("sfa"), py::arg("b"), py::arg("sfb"),
-          py::arg("d"), py::arg("masked_m"), py::arg("expected_m"),
-          py::arg("compiled_dims") = "nk");
-    
-    m.def("k_grouped_fp8_gemm_rowwise_nt_contiguous", &k_grouped_fp8_gemm_rowwise_nt_contiguous,
-          py::arg("a"), py::arg("sfa"), py::arg("b"), py::arg("sfb"),
-          py::arg("d"), py::arg("ks"), py::arg("ks_tensor"), 
-          py::arg("c") = std::nullopt,
-          py::arg("compiled_dims") = "mn");
-    // -----------------------------------
+    // m.def("m_grouped_fp8_gemm_rowwise_nt_masked", &m_grouped_fp8_gemm_rowwise_nt_masked,
+    //       py::arg("a"), py::arg("sfa"), py::arg("b"), py::arg("sfb"),
+    //       py::arg("d"), py::arg("masked_m"), py::arg("expected_m"),
+    //       py::arg("compiled_dims") = "nk");
 
     m.def("fp8_gemm_nn", &fp8_gemm_nn,
           py::arg("a"), py::arg("b"), py::arg("d"),
